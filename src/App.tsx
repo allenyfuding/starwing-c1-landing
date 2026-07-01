@@ -1,69 +1,50 @@
 import { useState, useRef, type FormEvent } from 'react';
 import './App.css';
 
-// 双 endpoint 兜底：优先 formsubmit.co，失败走 Web3Forms
-// 用 form action + hidden iframe 模式（浏览器原生 POST，跨域无 CORS，比 fetch 更抗 VPN/墙）
-const FORMSUBMIT_URL = 'https://formsubmit.co/bespoke@starwing-aero.com';
-// Web3Forms 备用：用户需在 web3forms.com 注册拿 access_key，目前占位
-void 'https://api.web3forms.com/submit'; // 占位，备用 endpoint
+// ============== 邮箱 endpoint（form action + hidden iframe 模式） ==============
+// 抗 VPN/墙、走浏览器原生 POST、跨域无 CORS、主页面不跳走
+// 改 endpoint：搜替换下面这一行即可，0 代码其他改动
+const EMAIL_ENDPOINT = 'https://formsubmit.co/bespoke@starwing-aero.com';
+
+// iframe 超时（formsubmit 重定向页面可能慢）
+const SUBMIT_TIMEOUT_MS = 12000;
 
 export default function App() {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const loadTimeoutRef = useRef<number | null>(null);
 
   const showToast = (t: { kind: 'success' | 'error'; message: string }) => {
     setToast(t);
     window.setTimeout(() => setToast((cur) => (cur === t ? null : cur)), 5200);
   };
 
-  const submitViaIframe = (url: string, hidden: HTMLFormElement) => {
-    return new Promise<boolean>((resolve) => {
+  const submitForm = (url: string, hiddenForm: HTMLFormElement): Promise<boolean> => {
+    return new Promise((resolve) => {
       const iframe = iframeRef.current!;
-      let resolved = false;
+      let done = false;
 
-      const onLoad = () => {
-        if (resolved) return;
-        resolved = true;
-        if (loadTimeoutRef.current) window.clearTimeout(loadTimeoutRef.current);
-        // formsubmit 返回 200 OK（HTML 页面）时 iframe 加载完成
-        // web3forms 同理
-        try {
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-          const body = iframeDoc?.body?.textContent || '';
-          // formsubmit 成功页通常包含 "Thank you" / "form has been submitted"
-          // web3forms 成功返回 { success: true }
-          if (
-            body.toLowerCase().includes('thank') ||
-            body.toLowerCase().includes('success') ||
-            body.toLowerCase().includes('received')
-          ) {
-            resolve(true);
-          } else {
-            resolve(true); // 假设成功（formsubmit 200 + 重定向页面无法直接验证内容）
-          }
-        } catch {
-          // 跨域 iframe 无法读取内容（CORS）— 假设成功
-          resolve(true);
-        }
-      };
+      const timer = window.setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve(false); // 超时
+      }, SUBMIT_TIMEOUT_MS);
 
-      iframe.addEventListener('load', onLoad, { once: true });
+      iframe.addEventListener(
+        'load',
+        () => {
+          if (done) return;
+          done = true;
+          window.clearTimeout(timer);
+          resolve(true); // iframe 加载完成 ≈ 表单提交完成
+        },
+        { once: true },
+      );
 
-      // 12s 超时 — formsubmit 慢的话给足时间
-      loadTimeoutRef.current = window.setTimeout(() => {
-        if (resolved) return;
-        resolved = true;
-        iframe.removeEventListener('load', onLoad);
-        resolve(false);
-      }, 12000);
-
-      // 设置 form 提交到 iframe
-      hidden.action = url;
-      hidden.target = 'c1-landing-iframe';
-      hidden.submit();
+      hiddenForm.action = url;
+      hiddenForm.target = 'c1-landing-iframe';
+      hiddenForm.submit();
     });
   };
 
@@ -72,14 +53,15 @@ export default function App() {
     if (status === 'submitting') return;
 
     const trimmed = email.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!EMAIL_RE.test(trimmed)) {
       showToast({ kind: 'error', message: 'Please enter a valid email address.' });
       return;
     }
 
     setStatus('submitting');
 
-    // 创建隐藏 form
+    // 隐藏 form
     const form = document.createElement('form');
     form.method = 'POST';
     form.style.display = 'none';
@@ -94,7 +76,6 @@ export default function App() {
       product: 'C1 · EDGECHORD',
       subscribed_at: new Date().toISOString(),
     };
-
     Object.entries(fields).forEach(([k, v]) => {
       const input = document.createElement('input');
       input.type = 'hidden';
@@ -102,12 +83,10 @@ export default function App() {
       input.value = v;
       form.appendChild(input);
     });
-
     document.body.appendChild(form);
 
     try {
-      // 先试 formsubmit
-      const ok = await submitViaIframe(FORMSUBMIT_URL, form);
+      const ok = await submitForm(EMAIL_ENDPOINT, form);
       if (ok) {
         setStatus('success');
         setEmail('');
@@ -116,9 +95,6 @@ export default function App() {
           message: 'Received. Our concierge will reach you within 24 hours.',
         });
       } else {
-        // formsubmit 失败，尝试 web3forms（form action 模式）
-        // web3forms 需要 access_key，先用占位 key（用户需在 web3forms.com 注册后填邮箱拿到 key）
-        // 临时方案：fallback 仅作 toast 提示，邮件没发
         setStatus('error');
         showToast({
           kind: 'error',
@@ -196,7 +172,7 @@ export default function App() {
 
       <footer className="foot">© 2026</footer>
 
-      {/* 隐藏 iframe — form action 提交到这里，不跳页 */}
+      {/* form action 提交到这里，主页面不跳走 */}
       <iframe
         ref={iframeRef}
         name="c1-landing-iframe"
