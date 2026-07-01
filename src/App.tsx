@@ -35,6 +35,11 @@ export default function App() {
     }
 
     setStatus('submitting');
+
+    // 用 AbortController 给 fetch 套个 8s 超时 — 避免浏览器挂死等 30s+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
     try {
       const res = await fetch(API_ENDPOINT, {
         method: 'POST',
@@ -45,7 +50,9 @@ export default function App() {
           contact: trimmed,
           locale: 'en',
         }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeoutId);
 
       // Handle non-JSON responses (e.g. Vercel 404 HTML)
       const ct = res.headers.get('content-type') || '';
@@ -75,12 +82,32 @@ export default function App() {
         });
       }
     } catch (err) {
-      setStatus('error');
+      window.clearTimeout(timeoutId);
+
+      const aborted = err instanceof Error && err.name === 'AbortError';
+      console.error(
+        '[c1-landing] submit failed:',
+        aborted ? 'fetch timeout (8s)' : err,
+      );
+
+      // Fallback：主站挂了就退到 mailto: 让用户的邮箱客户端把请求转给我们
+      const subject = encodeURIComponent(`C1 Subscription · ${trimmed}`);
+      const body = encodeURIComponent(
+        `Email: ${trimmed}\nLocale: en\nSource: C1 Landing Page\n\nPlease add me to the C1 priority notification list.`,
+      );
+      const mailto = `mailto:bespoke@starwing-aero.com?subject=${subject}&body=${body}`;
+
+      // 8s 超时或网络错误 → 自动唤起邮箱客户端（保证用户不丢失这次订阅）
+      window.location.href = mailto;
+
+      setStatus('success');
+      setEmail('');
       showToast({
-        kind: 'error',
-        message: 'Network error. Please check your connection and retry.',
+        kind: 'success',
+        message: aborted
+          ? 'Server slow — opening your email client to confirm.'
+          : 'Network issue — opening your email client to confirm.',
       });
-      console.error('[c1-landing] submit error:', err);
     } finally {
       // 2.5s 后允许再次提交
       window.setTimeout(() => setStatus('idle'), 2500);
