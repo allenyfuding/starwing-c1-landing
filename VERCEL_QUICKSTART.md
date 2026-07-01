@@ -93,6 +93,8 @@
 
 ## 🛠 故障排查
 
+### 速查表
+
 | 现象 | 原因 | 解决 |
 |---|---|---|
 | Deployments 显示 **Building** | 冷编译 30-60s | 等 1 分钟重试 |
@@ -102,6 +104,34 @@
 | `c1.starwing-aero.com` 打不开 | DNS 未传播 / 配错 | `dig c1.starwing-aero.com CNAME` 查；或等 30 分钟 |
 | 收不到 `bespoke@starwing-aero.com` 邮件 | FormSubmit 未激活 | 检查 `noreply@formsubmit.co` 激活邮件 → 点 Confirm |
 | Vercel Dashboard 看不到项目 | 登录错账号 | 用 GitHub 账号 `allenyfuding` 登录 |
+
+### Vercel Domains 状态码速查（2026-07-01 09:07 用户首次绑域实测）
+
+Vercel Dashboard → Settings → Domains 看到的提示含义：
+
+| Vercel 提示 | 含义 | 要不要紧 |
+|---|---|---|
+| `c1.starwing-aero.com` → **Invalid Configuration** | 域名已加进 Vercel 列表，**DNS 还没指过来** | ✅ **正常**·等 DNS 传播 |
+| `starwing-c1-landing.vercel.app` → **Valid Configuration** | Vercel 默认域名已通 | ✅ **正常** |
+| 状态码 `307` | Vercel 内部 placeholder（DNS 生效前显示），生效后变 200 | ✅ **正常** |
+| `Learn more` 链接 | 点开会进 Vercel 文档解释当前状态 | — |
+
+**典型正确流程**：
+1. Vercel 加 `c1.starwing-aero.com` → 立刻显示 `Invalid Configuration`（域名登记成功，等 DNS）
+2. Cloudflare 加 CNAME `c1` → `cname.vercel-dns.com` · **Proxy 必须 DNS only**（关橙色云朵）
+3. 等 5-30 分钟 → Vercel 自动验证 DNS → `Invalid` 变绿色 `Valid Configuration`
+4. Vercel 自动签 SSL 证书（Let's Encrypt）→ `https://c1.starwing-aero.com` 可访问
+
+### ⚠️ Cloudflare 橙色云朵必关
+
+**这是最容易踩的坑。** Cloudflare 代理过的请求，Vercel 拿不到真实 client IP，**SSL 证书签发会失败**。
+
+| Proxy 状态 | Vercel 看到的 | SSL 签发 |
+|---|---|---|
+| 🟠 Proxied（橙色云开） | Cloudflare 代理 IP | ❌ 失败 |
+| ⚪ **DNS only**（橙色云关） | 真实 client IP | ✅ 成功 |
+
+**改 Proxy 状态**：Cloudflare DNS 记录 → 点 Edit → 把橙色云点成灰色 → Save。**不要删记录重建**。
 
 ---
 
